@@ -1,0 +1,10 @@
+https://speed.hetzner.de/10MB.bin
+https://ipv4.download.thinkbroadband.com/20MB.zip
+https://speed.hetzner.de/50MB.bin
+https://ipv4.download.thinkbroadband.com/100MB.zip
+https://speed.hetzner.de/200MB.bin
+https://ipv4.download.thinkbroadband.com/250MB.zip
+https://speed.hetzner.de/500MB.bin
+https://ipv4.download.thinkbroadband.com/750MB.zip
+https://speed.hetzner.de/1GB.bin
+https://ipv4.download.thinkbroadband.com/1GB.zip
