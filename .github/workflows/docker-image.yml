@@ -23,7 +23,6 @@ jobs:
     - name: Build and Push image
       run: |
         docker buildx build \
-          --file ./Dockerfile \
           --platform linux/arm64,linux/amd64\
           --tag ${{ secrets.DOCKER_USERNAME }}/node-list-downloader \
           --push .
