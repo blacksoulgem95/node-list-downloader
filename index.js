@@ -1,8 +1,9 @@
 const fs = require('fs');
 const https = require('https');
 const path = require('path');
-import {defer, from} from "rxjs";
-import { mergeAll } from "rxjs/operators";
+const {defer, from} = require("rxjs")
+const { mergeAll } = require("rxjs/operators");
+require("dotenv").config()
 
 // Funzione per stampare la progressione del download
 function printProgress(completed, total) {
