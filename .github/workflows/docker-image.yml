@@ -25,5 +25,5 @@ jobs:
         docker buildx build \
           --file Dockerfile \
           --platform linux/arm64,linux/amd64\
-          --tag quay.io/user/tools:${{ steps.date.outputs.date }} \
+          --tag ${{ secrets.DOCKER_USERNAME }}/node-list-downloader \
           --push .
