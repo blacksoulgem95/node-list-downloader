@@ -5,6 +5,7 @@ import {from, of} from 'rxjs';
 import {catchError, finalize, map, mergeMap} from 'rxjs/operators';
 import {config} from "dotenv"
 import cliTable from "cli-table3"
+import * as logger from "./logger.js"
 
 config();
 
@@ -104,20 +105,19 @@ function downloadFile$(url, destination) {
                     reject(`Reindirizzamento senza Location per ${url}`);
                     return;
                 }
-                console.log(`Reindirizzamento da ${url} a ${redirectUrl}`);
+                logger.debug(`Reindirizzamento da ${url} a ${redirectUrl}`);
                 resolve(downloadFile$(redirectUrl, destination));
                 return;
             }
 
             if (statusCode === 416) {
-                console.log("file già scaricato", destination)
+                logger.debug("file già scaricato", destination)
                 fileSize = parseInt(headers['content-length'], 10) + downloadedSize;
                 updateContext(
                     `${path.basename(new URL(url).pathname)} (${new URL(url).host})`,
                     downloadedSize, fileSize, downloadedSize, new Date().getMilliseconds(), new Date().getMilliseconds())
-            }
 
-            if (statusCode === 200 || statusCode === 206) {
+            } else if (statusCode === 200 || statusCode === 206) {
                 fileSize = parseInt(headers['content-length'], 10) + downloadedSize;
                 const file = fs.createWriteStream(destination, {flags: 'a'});
 
@@ -137,7 +137,7 @@ function downloadFile$(url, destination) {
                 file.on('finish', () => {
                     file.close(() => {
                         if (downloadedSize === fileSize) {
-                            console.log(`\nDownload completato: ${path.basename(destination)}`);
+                            logger.debug(`\nDownload completato: ${path.basename(destination)}`);
                             resolve(destination);
                         } else {
                             reject(`File incompleto per ${url}.`);
@@ -165,10 +165,10 @@ function downloadFileWithRetry$(url, destination, maxRetries = 3) {
     return of(null).pipe(
         mergeMap(() => from(downloadFile$(url, destination))),
         catchError((err) => {
-            console.error(`Errore scaricando ${url}: ${err}`);
+            logger.error(`Errore scaricando ${url}: ${err}`);
             return of(null); // Gestisce l'errore e continua
         }),
-        finalize(() => console.log(`Completato: ${url}`))
+        finalize(() => logger.log(`Completato: ${url}`))
     );
 }
 
@@ -187,7 +187,7 @@ function main() {
         .map((url) => url.trim())
         .filter((url) => url.length > 0);
 
-    console.log(`Trovati ${urls.length} URL. Inizio il download...\n`);
+    logger.log(`Trovati ${urls.length} URL. Inizio il download...\n`);
 
     from(urls)
         .pipe(
@@ -198,7 +198,7 @@ function main() {
                 // Verifica file esistente
                 if (fs.existsSync(destination)) {
                     const localSize = fs.statSync(destination).size;
-                    console.log(`File esistente, si tenta di finirlo nel caso non sia completo: ${fileName}`);
+                    logger.debug(`File esistente, si tenta di finirlo nel caso non sia completo: ${fileName}`);
                     return {url, destination, skip: false};
                 }
                 return {url, destination, skip: false};
@@ -213,10 +213,10 @@ function main() {
         )
         .subscribe({
             next: (result) => {
-                if (result) console.log(result);
+                if (result) logger.debug(result);
             },
-            error: (err) => console.error(`Errore nel flusso: ${err}`),
-            complete: () => console.log('\nTutti i download completati.')
+            error: (err) => logger.error(`Errore nel flusso: ${err}`),
+            complete: () => logger.log('\nTutti i download completati.')
         });
 }
 
