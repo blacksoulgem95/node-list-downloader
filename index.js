@@ -1,192 +1,218 @@
-const fs = require('fs');
-const https = require('https');
-const path = require('path');
-const {defer, from, throwError, of, last, forkJoin, fromEvent, catchError} = require("rxjs")
-const {mergeAll, map} = require("rxjs/operators");
-const {fromFetch} = require("rxjs/src/internal/observable/dom/fetch");
-require("dotenv").config()
+import fs from 'fs';
+import https from 'https';
+import path from 'path';
+import {from, of} from 'rxjs';
+import {catchError, finalize, map, mergeMap} from 'rxjs/operators';
+import {config} from "dotenv"
+import cliTable from "cli-table3"
 
-// Funzione per stampare la progressione del download
-function printProgress(completed, total) {
-    const percent = ((completed / total) * 100).toFixed(2);
-    const barLength = 20; // Lunghezza della barra di progresso
-    const completedLength = Math.round((completed / total) * barLength);
-    const bar = '█'.repeat(completedLength) + '-'.repeat(barLength - completedLength);
-    process.stdout.write(`\r[${bar}] ${percent}%`);
+config();
+
+const context = {}
+
+function updateContext(destination, downloadedSize, fileSize, prevSize, prevDate, curDate) {
+    context[destination] = {
+        downloaded: downloadedSize,
+        total: fileSize,
+        timestamp: curDate,
+        previousDownloaded: prevSize,
+        previousTimestamp: prevDate
+    }
+    printUpdate()
 }
 
-// Funzione per scaricare un file con supporto per il ripristino e rilevamento timeout
-function downloadFile(url, destination, maxRedirects = 5, retryCount = 3) {
+let printing = false
 
-    if (maxRedirects < 0) {
-        throwError(() => new Error(`Troppi reindirizzamenti per ${url}`));
-        return;
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 Byte';
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return (bytes / Math.pow(1024, i)).toFixed(2) + ' ' + sizes[i];
+}
+
+async function printUpdate() {
+    if (!printing) {
+        printing = true
+        await _printUpdate()
+        printing = false
     }
+}
 
-    if (retryCount <= 0) {
-        throwError(() => new Error(`Troppi tentativi falliti per ${url}`));
-        return;
-    }
+async function _printUpdate() {
 
-    let fileSize = 0;
-    let existingSize = 0;
+    return new Promise(resolve => {
+        const table = new cliTable({
+            head: ['URL', 'Scaricato', 'Totale', 'Progresso (%)', 'Velocità'],
+            colWidths: [40, 15, 15, 15, 30]
+        });
+        for (const [url, data] of Object.entries(context)) {
+            const {total, downloaded, timestamp, previousTimestamp, previousDownloaded} = data
 
-    if (fs.existsSync(destination)) {
-        existingSize = fs.statSync(destination).size;
-    }
+            const progressPercentage = total > 0 ? ((downloaded / total) * 100).toFixed(2) : 'N/A';
 
-    const options = {
-        headers: existingSize > 0 ? {Range: `bytes=${existingSize}-`} : {},
-    };
+            let speed = "In Attesa"
 
-    const timeoutDuration = 15000; // Timeout di 15 secondi
-    let timeout;
-
-    const handleTimeout = () => {
-        console.error(`\nTimeout durante il download di ${url}. Ritento...`);
-        fs.unlinkSync(destination); // Rimuove file incompleto
-        throwError(() => new Error(`Timeout durante il download di ${url}`))
-    };
-
-    return forkJoin([
-        fromFetch(url, options),
-        of(setTimeout(handleTimeout, timeoutDuration))
-    ]).pipe(map(data => {
-        const [response, t] = data
-        const {status: statusCode, headers} = response;
-
-        if ([301, 302, 303, 307, 308].includes(statusCode)) {
-            const redirectUrl = headers.location;
-
-            if (!redirectUrl) {
-                return throwError(() => new Error(`Reindirizzamento senza Location per ${url}`));
+            if (total > 0) {
+                if (formatBytes(downloaded) === formatBytes(total)) {
+                    speed = "Completato"
+                } else {
+                    if (timestamp === previousTimestamp) speed = formatBytes(0) + '/s'
+                    else speed = formatBytes(
+                        (downloaded - previousDownloaded) / (timestamp - previousTimestamp) * 1000
+                    ) + '/s'
+                }
             }
 
-            console.log(`\nReindirizzamento da ${url} a ${redirectUrl}`);
-            return downloadFile(redirectUrl, destination, maxRedirects - 1, retryCount);
+            table.push([
+                url,
+                formatBytes(downloaded),
+                formatBytes(total),
+                progressPercentage === 'N/A' ? 'In attesa' : `${progressPercentage} %`,
+                speed
+            ]);
         }
 
-        if (statusCode === 200 || statusCode === 206) {
-            fileSize = parseInt(headers['content-length'], 10) + existingSize;
-            const file = fs.createWriteStream(destination, {flags: 'a'});
-
-            let downloadedSize = existingSize;
-
-            timeout = setTimeout(handleTimeout, timeoutDuration);
-
-            response.on('data', (chunk) => {
-                clearTimeout(timeout);
-                downloadedSize += chunk.length;
-                printProgress(downloadedSize, fileSize);
-                timeout = setTimeout(handleTimeout, timeoutDuration);
-            });
-
-            response.pipe(file);
-
-            return fromEvent(file, 'finish')
-                .pipe(map(data => {
-                    clearTimeout(timeout);
-                    file.close(() => {
-                        if (downloadedSize === fileSize) {
-                            console.log('\nDownload completato.');
-                            return destination;
-                        } else {
-                            throwError(() => new Error(`File incompleto per ${url}. Dimensione attesa: ${fileSize}, scaricata: ${downloadedSize}`));
-                        }
-                    });
-                    return destination;
-
-                }))
-        } else {
-            throwError(() => new Error(`Errore durante il download di ${url}. Status: ${statusCode}`));
-        }
-    }), catchError(error => {
-        clearTimeout(timeout);
-        fs.unlinkSync(destination); // Rimuove file incompleto
-        console.error(`Errore durante il download di ${url}: ${err.message}. Ritento...`, error);
-        return downloadFile(url, destination, maxRedirects, retryCount - 1);
-    }))
-}
-
-function elaboraFile(url, idx, urls) {
-    const fileName = path.basename(new URL(url).pathname);
-    const destination = path.join(process.env['DESTINATION_DIR'], fileName);
-
-    return forkJoin([
-        of(url),
-        fs.existsSync(destination) ? getFileSize(url) : of(0)
-    ]).pipe(map(data => {
-        const [url, remoteSize] = data
-        if (remoteSize > 0) {
-            const localSize = fs.statSync(destination).size;
-            if (localSize === remoteSize) {
-                console.log(`File già scaricato: ${destination}`, `${idx} su ${urls.length} download`);
-                printProgress(idx, urls.length)
-                process.stdout.write("\n")
-                return throwError(() => new Error([`File già scaricato: ${destination}`, `${idx} su ${urls.length} download`].join('\n')))
-            }
-
-            console.log(`Scaricando: ${url}`, `${idx} su ${urls.length} download`);
-            printProgress(idx, urls.length)
-            process.stdout.write("\n")
-            return downloadFile(url, destination)
-        }
-    }))
-
-}
-
-// Funzione principale
-async function main() {
-    const inputFile = process.env.INPUT_FILE;
-
-    const urls = fs.readFileSync(inputFile, 'utf-8')
-        .split('\n')
-        .map(url => url.trim())
-        .filter(url => url.length > 0);
-
-    console.log(`Trovati ${urls.length} URL. Inizio il download...\n`);
-
-
-    const obs = urls.map((url, idx) => defer(() => elaboraFile(url, idx, urls)))
-
-    await new Promise((resolve) => {
-        from(obs)
-            .pipe(mergeAll(5))
-            .pipe(last())
-            .subscribe({
-                next: data => {
-                    console.log('tutti i download completati')
-                },
-                error: error => {
-                    console.error("errore durante il download", error)
-                },
-                complete: () => resolve()
-            })
+        console.clear();
+        console.log('Stato del download:');
+        console.log(table.toString());
+        setTimeout(resolve, 500)
     })
 }
 
-// Funzione per ottenere la dimensione di un file remoto
-function getFileSize(url) {
-    return fromFetch(url, {
-        method: "HEAD"
-    }).pipe(map(response => {
-        const {statusCode: status, headers} = response;
+// Funzione per scaricare un file HTTP
+function downloadFile$(url, destination) {
+    return new Promise((resolve, reject) => {
+        let fileSize = 0;
+        let downloadedSize = 0;
 
-        if ([301, 302, 303, 307, 308].includes(status)) {
-            const redirectUrl = headers.location;
-            if (redirectUrl) {
-                return getFileSize(redirectUrl);
-            } else {
-                throwError(() => new Error("Reindirizzamento senza Location"))
-            }
-        } else if (status === 200) {
-            const size = parseInt(headers['content-length'], 10);
-            return of(size);
-        } else {
-            throwError(() => new Error(`Errore ottenendo la dimensione del file: ${status}`))
+        // Verifica se esiste un file parziale
+        const options = {};
+        if (fs.existsSync(destination)) {
+            const stats = fs.statSync(destination);
+            downloadedSize = stats.size;
+            options.headers = {Range: `bytes=${downloadedSize}-`};
         }
-    }), last())
 
+        const req = https.get(url, options, (response) => {
+            const {statusCode, headers} = response;
+
+            // Gestione reindirizzamenti
+            if ([301, 302, 303, 307, 308].includes(statusCode)) {
+                const redirectUrl = headers.location;
+                if (!redirectUrl) {
+                    reject(`Reindirizzamento senza Location per ${url}`);
+                    return;
+                }
+                console.log(`Reindirizzamento da ${url} a ${redirectUrl}`);
+                resolve(downloadFile$(redirectUrl, destination));
+                return;
+            }
+
+            if (statusCode === 416) {
+                console.log("file già scaricato", destination)
+                fileSize = parseInt(headers['content-length'], 10) + downloadedSize;
+                updateContext(destination, downloadedSize, fileSize, downloadedSize, new Date().getMilliseconds(), new Date().getMilliseconds())
+            }
+
+            if (statusCode === 200 || statusCode === 206) {
+                fileSize = parseInt(headers['content-length'], 10) + downloadedSize;
+                const file = fs.createWriteStream(destination, {flags: 'a'});
+
+                let curDate = new Date().getMilliseconds()
+                response.on('data', (chunk) => {
+                    const prevSize = downloadedSize
+                    const prevDate = curDate
+                    curDate = new Date().getMilliseconds()
+                    downloadedSize += chunk.length;
+                    updateContext(destination, downloadedSize, fileSize, prevSize, prevDate, curDate)
+                });
+
+                response.pipe(file);
+
+                file.on('finish', () => {
+                    file.close(() => {
+                        if (downloadedSize === fileSize) {
+                            console.log(`\nDownload completato: ${path.basename(destination)}`);
+                            resolve(destination);
+                        } else {
+                            reject(`File incompleto per ${url}.`);
+                        }
+                    });
+                });
+
+                file.on('error', (err) => {
+                    file.close();
+                    reject(err);
+                });
+            } else {
+                reject(`Errore durante il download di ${url}. Status: ${statusCode}`);
+            }
+        });
+
+        req.on('error', (err) => {
+            reject(err);
+        });
+    });
+}
+
+// Funzione per scaricare un file con retry usando RxJS
+function downloadFileWithRetry$(url, destination, maxRetries = 3) {
+    return of(null).pipe(
+        mergeMap(() => from(downloadFile$(url, destination))),
+        catchError((err) => {
+            console.error(`Errore scaricando ${url}: ${err}`);
+            return of(null); // Gestisce l'errore e continua
+        }),
+        finalize(() => console.log(`Completato: ${url}`))
+    );
+}
+
+// Funzione principale
+function main() {
+    const inputFile = process.env.INPUT_FILE;
+    const downloadDir = process.env.DESTINATION_DIR;
+
+    if (!fs.existsSync(downloadDir)) {
+        fs.mkdirSync(downloadDir);
+    }
+
+    const urls = fs
+        .readFileSync(inputFile, 'utf-8')
+        .split('\n')
+        .map((url) => url.trim())
+        .filter((url) => url.length > 0);
+
+    console.log(`Trovati ${urls.length} URL. Inizio il download...\n`);
+
+    from(urls)
+        .pipe(
+            map((url) => {
+                const fileName = path.basename(new URL(url).pathname);
+                const destination = path.join(downloadDir, fileName);
+
+                // Verifica file esistente
+                if (fs.existsSync(destination)) {
+                    const localSize = fs.statSync(destination).size;
+                    console.log(`File esistente, si tenta di finirlo nel caso non sia completo: ${fileName}`);
+                    return {url, destination, skip: false};
+                }
+                return {url, destination, skip: false};
+            }),
+            mergeMap(
+                ({url, destination, skip}) =>
+                    skip
+                        ? of(`File già scaricato: ${destination}`)
+                        : downloadFileWithRetry$(url, destination),
+                5 // Limita a 5 richieste parallele
+            )
+        )
+        .subscribe({
+            next: (result) => {
+                if (result) console.log(result);
+            },
+            error: (err) => console.error(`Errore nel flusso: ${err}`),
+            complete: () => console.log('\nTutti i download completati.')
+        });
 }
 
 // Avvia lo script
