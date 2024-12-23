@@ -87,6 +87,8 @@ function downloadFile$(url, destination) {
         let fileSize = 0;
         let downloadedSize = 0;
 
+        logger.log('Downloading file', `${path.basename(new URL(url).pathname)} (${new URL(url).host})`)
+
         // Verifica se esiste un file parziale
         const options = {};
         if (fs.existsSync(destination)) {

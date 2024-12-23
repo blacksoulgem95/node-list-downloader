@@ -16,7 +16,7 @@ const levelMapper = {
 const stream = fs.createWriteStream(process.env['LOGFILE'] || path.join(dirname(__filename), 'nodelistdownloader.log'), {flags: 'a'});
 
 const print = (level, data) => {
-    if (level === "debug" && process.env['DEBUG'] === "false") {
+    if (level === "debug" && process.env['DEBUG'] !== "true") {
         return
     }
 
