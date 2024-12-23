@@ -12,6 +12,9 @@
 - [Italiano](#italiano)
 - [Français](#français)
 
+To change the app language, use the environment variable `LANGUAGE`.
+Supported languages: cn, en, es, fr, it, jp, ru
+
 ---
 
 ## English

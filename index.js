@@ -6,12 +6,25 @@ import {catchError, finalize, map, mergeMap} from 'rxjs/operators';
 import {config} from "dotenv"
 import cliTable from "cli-table3"
 import * as logger from "./logger.js"
+import I18n from "./i18n/index.js";
 
 config();
 
 const context = {}
 let urls = []
 let idxMax = 0;
+
+const i18n = new I18n(process.env['LANGUAGE'] || 'en')
+const t = i18n.translate.bind(i18n)
+
+function printProgress(completed, total) {
+    const percent = ((completed / total) * 100).toFixed(2);
+    const barLength = 20; // Lunghezza della barra di progresso
+    const completedLength = Math.round((completed / total) * barLength);
+    const bar = '█'.repeat(completedLength) + '-'.repeat(barLength - completedLength);
+    process.stdout.write(`\r[${bar}] ${percent}%`);
+}
+
 
 function filename(url) {
     const filename = filename$(url)
@@ -55,11 +68,11 @@ async function _printUpdate() {
 
     return new Promise(resolve => {
         const table = new cliTable({
-            head: ['URL', 'Scaricato', 'Totale', 'Progresso (%)', 'Velocità'],
+            head: [t('report.url'), t('report.downloaded'), t('report.total'), t('report.progress'), t('report.speed')],
             colWidths: [60, 15, 15, 15, 30]
         });
         const table2 = new cliTable({
-            head: ['Elaborati', 'Totali'],
+            head: [t('report.noDownloaded'), t('report.noTotal')],
             colWidths: [15, 15]
         })
 
@@ -72,11 +85,11 @@ async function _printUpdate() {
                 || formatBytes(downloaded) === formatBytes(total))
                 continue
 
-            let speed = "In Attesa"
+            let speed = t('report.waiting')
 
             if (total > 0) {
                 if (formatBytes(downloaded) === formatBytes(total)) {
-                    speed = "Completato"
+                    speed = t('report.completed')
                 } else {
                     if (timestamp === previousTimestamp) speed = formatBytes(0) + '/s'
                     else speed = formatBytes(
@@ -89,23 +102,24 @@ async function _printUpdate() {
                 destination,
                 formatBytes(downloaded),
                 formatBytes(total),
-                progressPercentage === 'N/A' ? 'In attesa' : `${progressPercentage} %`,
+                progressPercentage === 'N/A' ? t('report.waiting') : `${progressPercentage} %`,
                 speed
             ]);
         }
 
         table2.push([idxMax, urls.length])
 
-        // console.clear();
-        console.log('Stato del download:');
+        console.clear();
+        console.log(t('report.title'));
         console.log(table.toString());
         console.log(table2.toString());
+        printProgress(idxMax, urls.length)
         setTimeout(resolve, 500)
     })
 }
 
 function getFileSize$(url) {
-    logger.log("Ottengo dimensione per", url)
+    logger.log(t('logging.obtainingSize', {file: url}))
     return new Promise((resolve, reject) => {
         https.get(url, {method: 'HEAD'}, (response) => {
             const {statusCode, headers} = response;
@@ -115,13 +129,13 @@ function getFileSize$(url) {
                 if (redirectUrl) {
                     resolve(getFileSize$(redirectUrl));
                 } else {
-                    reject('Reindirizzamento senza Location');
+                    reject(t('error.redirectWithoutLocation', {url}));
                 }
             } else if (statusCode === 200) {
                 const size = parseInt(headers['content-length'], 10);
                 resolve(size);
             } else {
-                reject(`Errore ottenendo la dimensione del file: ${statusCode}`);
+                reject(t('error.getFileSizeGeneric', {statusCode}));
             }
         }).on('error', reject);
     });
@@ -134,7 +148,7 @@ function downloadFile$(url, destination) {
         let fileSize = 0;
         let downloadedSize = 0;
 
-        logger.log('Scaricamento', filename(url))
+        logger.log(t('logging.downloading', {file: filename(url)}))
 
         // Verifica se esiste un file parziale
         const options = {};
@@ -144,13 +158,10 @@ function downloadFile$(url, destination) {
             options.headers = {Range: `bytes=${downloadedSize}-`};
             fileSize = await getFileSize$(url, downloadedSize)
             if (downloadedSize === fileSize) {
-                logger.log("File già scaricato, skip")
+                logger.log(t('logging.alreadyDownloaded'))
                 resolve(destination)
             }
         }
-
-
-        logger.debug("Controllo dimensione", formatBytes(downloadedSize), downloadedSize, formatBytes(fileSize), fileSize)
 
         const req = https.get(url, options, (response) => {
             const {statusCode, headers} = response;
@@ -159,16 +170,16 @@ function downloadFile$(url, destination) {
             if ([301, 302, 303, 307, 308].includes(statusCode)) {
                 const redirectUrl = headers.location;
                 if (!redirectUrl) {
-                    reject(`Reindirizzamento senza Location per ${url}`);
+                    reject(t('error.redirectWithoutLocation', {url}));
                     return;
                 }
-                logger.debug(`Reindirizzamento da ${url} a ${redirectUrl}`);
+                logger.debug(t('logging.redirect', {origin: url, redirect: redirectUrl}));
                 resolve(downloadFile$(redirectUrl, destination));
                 return;
             }
 
             if (statusCode === 416) {
-                logger.debug("file già scaricato", destination)
+                logger.debug(t('logging.alreadyDownloaded'), destination)
                 fileSize = parseInt(headers['content-length'], 10) + downloadedSize;
                 updateContext(
                     filename(url), url, downloadedSize, fileSize, downloadedSize, new Date().getMilliseconds(), new Date().getMilliseconds())
@@ -192,10 +203,10 @@ function downloadFile$(url, destination) {
                 file.on('finish', () => {
                     file.close(() => {
                         if (downloadedSize === fileSize) {
-                            logger.debug(`\nDownload completato: ${path.basename(destination)}`);
+                            logger.debug(t('logging.downloadCompleted', {file: filename$(url)}));
                             resolve(destination);
                         } else {
-                            reject(`File incompleto per ${url}.`);
+                            reject(t('error.uncompletedFile', {file: url}));
                         }
                     });
                 });
@@ -205,7 +216,7 @@ function downloadFile$(url, destination) {
                     reject(err);
                 });
             } else {
-                reject(`Errore durante il download di ${url}. Status: ${statusCode}`);
+                reject(t('error.downloadError', {file: url, statusCode}));
             }
         });
 
@@ -220,12 +231,12 @@ function downloadFileWithRetry$(url, destination, maxRetries = 3) {
     return of(null).pipe(
         mergeMap(() => from(downloadFile$(url, destination))),
         catchError((err) => {
-            logger.error(`Errore scaricando ${url}: ${err}`);
+            logger.error(t('error.downloadError', {file: url, statusCode: err}));
             return of(null); // Gestisce l'errore e continua
         }),
         finalize(() => {
             idxMax++
-            logger.log(`Completato: ${url}`)
+            logger.log(t('downloadCompleted', {file: url}))
         })
     );
 }
@@ -245,7 +256,7 @@ function main() {
         .map((url) => decodeURI(url.trim()))
         .filter((url) => url.length > 0);
 
-    logger.log(`Trovati ${urls.length} URL. Inizio il download...\n`);
+    logger.log(t('logging.urlsFound', {noUrls: urls.length}));
 
     from(urls)
         .pipe(
@@ -257,7 +268,7 @@ function main() {
                 // Verifica file esistente
                 if (fs.existsSync(destination)) {
                     const localSize = fs.statSync(destination).size;
-                    logger.log(`File esistente, si tenta di finirlo nel caso non sia completo: ${fileName}`);
+                    logger.log(t('logging.existingFile', {file: fileName}));
                     return {url, destination, skip: false};
                 }
                 return {url, destination, skip: false};
@@ -274,8 +285,8 @@ function main() {
             next: (result) => {
                 if (result) logger.debug(result);
             },
-            error: (err) => logger.error(`Errore nel flusso: ${err}`),
-            complete: () => logger.log('\nTutti i download completati.')
+            error: (err) => logger.error(t('error.fluxError', {err})),
+            complete: () => logger.log("\n", t('logging.allCompleted'))
         });
 }
 
