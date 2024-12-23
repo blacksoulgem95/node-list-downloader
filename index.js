@@ -43,7 +43,7 @@ async function _printUpdate() {
     return new Promise(resolve => {
         const table = new cliTable({
             head: ['URL', 'Scaricato', 'Totale', 'Progresso (%)', 'Velocità'],
-            colWidths: [40, 15, 15, 15, 30]
+            colWidths: [60, 15, 15, 15, 30]
         });
         for (const [url, data] of Object.entries(context)) {
             const {total, downloaded, timestamp, previousTimestamp, previousDownloaded} = data
