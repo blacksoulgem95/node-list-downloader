@@ -8,7 +8,7 @@ import cliTable from "cli-table3"
 import * as logger from "./logger.js"
 import I18n from "./i18n/index.js";
 import Metadata from "./Metadata.js"
-import {newLine, printProgress} from "./utils.js";
+import {getProgressBar, newLine, printProgress} from "./utils.js";
 
 config();
 
@@ -68,7 +68,7 @@ async function _printUpdate(extraLog) {
     return new Promise(resolve => {
         const table = new cliTable({
             head: [t('report.url'), t('report.downloaded'), t('report.total'), t('report.progress'), t('report.speed')],
-            colWidths: [60, 15, 15, 15, 30]
+            colWidths: [60, 15, 15, 40, 20]
         });
         const table2 = new cliTable({
             head: [t('report.noDownloaded'), t('report.noTotal')],
@@ -83,10 +83,8 @@ async function _printUpdate(extraLog) {
             const previousTimestamp = meta.getPrevUpdateTs()
             const previousDownloaded = meta.getPrevDownloadedSize()
 
-            const progressPercentage = total > 0 ? ((downloaded / total) * 100).toFixed(2) : 'N/A';
             if (meta.getCompleted()
                 || downloaded === total
-                || progressPercentage === "100.00"
                 || formatBytes(downloaded) === formatBytes(total)
                 || total === 0)
                 continue
@@ -103,6 +101,8 @@ async function _printUpdate(extraLog) {
                     ) + '/s'
                 }
             }
+
+            const progressPercentage = total > 0 ? getProgressBar(downloaded, total) : 'N/A'
 
             table.push([
                 url,
