@@ -5,13 +5,15 @@
   "type": "module",
   "scripts": {
     "start": "node index.js",
-    "reformat": "node reformat.js"
+    "reformat": "node reformat.js",
+    "extract": "node extractor/index.js"
   },
   "author": "",
   "license": "MIT",
   "description": "",
   "dependencies": {
     "chalk": "^5.4.1",
+    "cheerio": "^1.0.0",
     "cli-table3": "^0.6.5",
     "dotenv": "^16.4.7",
     "moment": "^2.30.1",

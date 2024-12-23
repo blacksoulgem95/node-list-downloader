@@ -8,6 +8,7 @@ import cliTable from "cli-table3"
 import * as logger from "./logger.js"
 import I18n from "./i18n/index.js";
 import Metadata from "./Metadata.js"
+import {newLine, printProgress} from "./utils.js";
 
 config();
 
@@ -34,18 +35,6 @@ function censor(censor) {
 
 const i18n = new I18n(process.env['LANGUAGE'] || 'en')
 const t = i18n.translate.bind(i18n)
-
-function printProgress(completed, total) {
-    const percent = ((completed / total) * 100).toFixed(2);
-    const barLength = 20; // Lunghezza della barra di progresso
-    const completedLength = Math.round((completed / total) * barLength);
-    const bar = '█'.repeat(completedLength) + '-'.repeat(barLength - completedLength);
-    process.stdout.write(`\r[${bar}] ${percent}%`);
-}
-
-function newLine() {
-    process.stdout.write(`\n`);
-}
 
 function filename(url) {
     const filename = filename$(url)
