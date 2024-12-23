@@ -43,6 +43,9 @@ function printProgress(completed, total) {
     process.stdout.write(`\r[${bar}] ${percent}%`);
 }
 
+function newLine() {
+    process.stdout.write(`\n`);
+}
 
 function filename(url) {
     const filename = filename$(url)
@@ -130,6 +133,7 @@ async function _printUpdate(extraLog) {
         console.log(table2.toString());
         console.log(extraLog || new Date().toLocaleString())
         printProgress(idxMax, urls.length)
+        newLine()
         setTimeout(resolve, 500)
     })
 }
