@@ -108,7 +108,6 @@ export default class Metadata {
                     .prevUpdateTs(meta._prevUpdateTs || 0)
                     .prevDownloadedSize(meta._prevDownloadedSize)
                     .url(meta._url)
-                    .flush()
                 logger.debug("loaded metadata", this, metaFile)
                 return this
             } catch (error) {
