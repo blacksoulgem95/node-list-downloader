@@ -7,12 +7,30 @@ import {config} from "dotenv"
 import cliTable from "cli-table3"
 import * as logger from "./logger.js"
 import I18n from "./i18n/index.js";
+import Metadata from "./Metadata.js"
 
 config();
 
-const context = {}
+const context = []
 let urls = []
 let idxMax = 0;
+
+function censor(censor) {
+    let i = 0;
+
+    return function(key, value) {
+        if(i !== 0 && typeof(censor) === 'object' && typeof(value) == 'object' && censor === value)
+            return '[Circular]';
+
+        if(i >= 29) // seems to be a harded maximum of 30 serialized objects?
+            return '[Unknown]';
+
+        ++i; // so we know we aren't using the original object anymore
+
+        return value;
+    }
+}
+
 
 const i18n = new I18n(process.env['LANGUAGE'] || 'en')
 const t = i18n.translate.bind(i18n)
@@ -35,17 +53,6 @@ function filename$(url) {
     return decodeURI(path.basename(new URL(url).pathname))
 }
 
-function updateContext(destination, url, downloadedSize, fileSize, prevSize, prevDate, curDate) {
-    context[destination] = {
-        url,
-        downloaded: downloadedSize,
-        total: fileSize,
-        timestamp: curDate,
-        previousDownloaded: prevSize,
-        previousTimestamp: prevDate
-    }
-    printUpdate()
-}
 
 let printing = false
 
@@ -56,15 +63,15 @@ function formatBytes(bytes) {
     return (bytes / Math.pow(1024, i)).toFixed(2) + ' ' + sizes[i];
 }
 
-async function printUpdate() {
+async function printUpdate(extraLog) {
     if (!printing) {
         printing = true
-        await _printUpdate()
+        await _printUpdate(extraLog)
         printing = false
     }
 }
 
-async function _printUpdate() {
+async function _printUpdate(extraLog) {
 
     return new Promise(resolve => {
         const table = new cliTable({
@@ -76,13 +83,20 @@ async function _printUpdate() {
             colWidths: [15, 15]
         })
 
-        for (const [destination, data] of Object.entries(context)) {
-            const {url, total, downloaded, timestamp, previousTimestamp, previousDownloaded} = data
+        for (const meta of context) {
+            const url = filename$(meta.getUrl())
+            const total = meta.getFileSize()
+            const downloaded = meta.getDownloadedSize()
+            const timestamp = meta.getLastUpdateTs()
+            const previousTimestamp = meta.getPrevUpdateTs()
+            const previousDownloaded = meta.getPrevDownloadedSize()
 
             const progressPercentage = total > 0 ? ((downloaded / total) * 100).toFixed(2) : 'N/A';
-            if (downloaded === total
+            if (meta.getCompleted()
+                || downloaded === total
                 || progressPercentage === "100.00"
-                || formatBytes(downloaded) === formatBytes(total))
+                || formatBytes(downloaded) === formatBytes(total)
+                || total === 0)
                 continue
 
             let speed = t('report.waiting')
@@ -99,7 +113,7 @@ async function _printUpdate() {
             }
 
             table.push([
-                destination,
+                url,
                 formatBytes(downloaded),
                 formatBytes(total),
                 progressPercentage === 'N/A' ? t('report.waiting') : `${progressPercentage} %`,
@@ -109,10 +123,12 @@ async function _printUpdate() {
 
         table2.push([idxMax, urls.length])
 
-        console.clear();
+        if (process.env['DEBUG'] !== 'true') console.clear();
+
         console.log(t('report.title'));
         console.log(table.toString());
         console.log(table2.toString());
+        console.log(extraLog || new Date().toLocaleString())
         printProgress(idxMax, urls.length)
         setTimeout(resolve, 500)
     })
@@ -143,80 +159,118 @@ function getFileSize$(url) {
 
 
 // Funzione per scaricare un file HTTP
-function downloadFile$(url, destination) {
+function downloadFile$(meta) {
     return new Promise(async (resolve, reject) => {
-        let fileSize = 0;
-        let downloadedSize = 0;
 
-        logger.log(t('logging.downloading', {file: filename(url)}))
+
+        if (context.indexOf(meta) < 0) context.push(meta)
+        printUpdate(t('logging.downloading', {file: filename(meta.getUrl())}))
 
         // Verifica se esiste un file parziale
         const options = {};
-        if (fs.existsSync(destination)) {
-            const stats = fs.statSync(destination);
-            downloadedSize = stats.size;
-            options.headers = {Range: `bytes=${downloadedSize}-`};
-            fileSize = await getFileSize$(url, downloadedSize)
-            if (downloadedSize === fileSize) {
+        if (fs.existsSync(meta.getFilename())) {
+            const stats = fs.statSync(meta.getFilename());
+            options.headers = {Range: `bytes=${stats.size}-`};
+            if (meta.getDownloadedSize() !== stats.size) {
+                meta.downloadedSize(stats.size)
+                    .fileSize(await getFileSize$(meta.getUrl()))
+                    .flush()
+            }
+
+            printUpdate()
+            if (meta.getDownloadedSize() === meta.getFileSize()) {
                 logger.log(t('logging.alreadyDownloaded'))
-                resolve(destination)
+                idxMax++;
+                return resolve(meta.completed(true).flush())
             }
         }
 
-        const req = https.get(url, options, (response) => {
+        printUpdate()
+        const req = https.get(meta.getUrl(), options, (response) => {
             const {statusCode, headers} = response;
+            printUpdate()
 
+            // logger.debug("response", JSON.stringify(response, censor(response), 2))
             // Gestione reindirizzamenti
             if ([301, 302, 303, 307, 308].includes(statusCode)) {
                 const redirectUrl = headers.location;
                 if (!redirectUrl) {
-                    reject(t('error.redirectWithoutLocation', {url}));
+                    reject(t('error.redirectWithoutLocation', {url: meta.getUrl()}));
                     return;
                 }
-                logger.debug(t('logging.redirect', {origin: url, redirect: redirectUrl}));
-                resolve(downloadFile$(redirectUrl, destination));
+                logger.debug(t('logging.redirect', {origin: meta.getUrl(), redirect: redirectUrl}));
+                meta.url(redirectUrl).flush()
+                resolve(downloadFile$(meta));
                 return;
             }
 
             if (statusCode === 416) {
-                logger.debug(t('logging.alreadyDownloaded'), destination)
-                fileSize = parseInt(headers['content-length'], 10) + downloadedSize;
-                updateContext(
-                    filename(url), url, downloadedSize, fileSize, downloadedSize, new Date().getMilliseconds(), new Date().getMilliseconds())
+                logger.debug(t('logging.alreadyDownloaded'), meta.getFilename())
+                idxMax++
+                meta.fileSize(parseInt(headers['content-length'], 10) + meta.getDownloadedSize());
+                meta.lastUpdateTs(new Date().getMilliseconds())
+                    .prevUpdateTs(new Date().getMilliseconds())
+                    .completed(true)
+                    .flush()
+                printUpdate()
+                resolve(meta)
 
             } else if (statusCode === 200 || statusCode === 206) {
-                fileSize = parseInt(headers['content-length'], 10) + downloadedSize;
-                const file = fs.createWriteStream(destination, {flags: 'a'});
+                meta.fileSize(parseInt(headers['content-length'], 10) + meta.getDownloadedSize());
+                const file = fs.createWriteStream(meta.getFilename(), {flags: 'a'});
 
-                let curDate = new Date().getMilliseconds()
+                meta.lastUpdateTs(new Date().getMilliseconds())
+                    .prevUpdateTs(new Date().getMilliseconds())
+                    .completed(false)
+                    .flush()
+                printUpdate()
+
                 response.on('data', (chunk) => {
-                    const prevSize = downloadedSize
-                    const prevDate = curDate
-                    curDate = new Date().getMilliseconds()
-                    downloadedSize += chunk.length;
-                    updateContext(
-                        filename(url), url, downloadedSize, fileSize, prevSize, prevDate, curDate)
+                    meta.prevUpdateTs(meta.getLastUpdateTs())
+                        .lastUpdateTs(new Date().getMilliseconds())
+                        .prevDownloadedSize(meta.getDownloadedSize())
+                        .downloadedSize(meta.getDownloadedSize() + chunk.length)
+                        .flush()
+                    printUpdate()
                 });
+
+                response.on('close', (error) => {
+                    if (meta.getDownloadedSize() !== meta.getFileSize()) {
+                        let msg = t("error.downloadError", {file: meta.getUrl(), statusCode: error})
+                        logger.error(msg)
+                        reject(msg)
+                    }
+                    printUpdate()
+                })
+
+                response.on('timeout', (error) => {
+                    let msg = t("error.downloadError", {file: meta.getUrl(), statusCode: error})
+                    logger.error(msg)
+                    reject(msg)
+                    printUpdate()
+                })
 
                 response.pipe(file);
 
                 file.on('finish', () => {
                     file.close(() => {
-                        if (downloadedSize === fileSize) {
-                            logger.debug(t('logging.downloadCompleted', {file: filename$(url)}));
-                            resolve(destination);
+                        if (meta.getDownloadedSize() === meta.getFileSize()) {
+                            logger.debug(t('logging.downloadCompleted', {file: filename$(meta.getUrl())}));
+                            resolve(meta);
                         } else {
-                            reject(t('error.uncompletedFile', {file: url}));
+                            reject(t('error.uncompletedFile', {file: meta.getUrl()}));
                         }
+                        printUpdate()
                     });
                 });
 
                 file.on('error', (err) => {
                     file.close();
                     reject(err);
+                    printUpdate()
                 });
             } else {
-                reject(t('error.downloadError', {file: url, statusCode}));
+                reject(t('error.downloadError', {file: meta.getUrl(), statusCode}));
             }
         });
 
@@ -227,16 +281,16 @@ function downloadFile$(url, destination) {
 }
 
 // Funzione per scaricare un file con retry usando RxJS
-function downloadFileWithRetry$(url, destination, maxRetries = 3) {
+function downloadFileWithRetry$(meta, maxRetries = 3) {
     return of(null).pipe(
-        mergeMap(() => from(downloadFile$(url, destination))),
+        mergeMap(() => from(downloadFile$(meta))),
         catchError((err) => {
-            logger.error(t('error.downloadError', {file: url, statusCode: err}));
+            logger.error(t('error.downloadError', {file: meta.getUrl(), statusCode: err}));
             return of(null); // Gestisce l'errore e continua
         }),
         finalize(() => {
             idxMax++
-            logger.log(t('downloadCompleted', {file: url}))
+            logger.log(t('logging.downloadCompleted', {file: meta.getUrl()}))
         })
     );
 }
@@ -265,27 +319,35 @@ function main() {
 
                 const destination = path.join(downloadDir, fileName);
 
+                const meta = new Metadata(destination, url).load()
+
                 // Verifica file esistente
                 if (fs.existsSync(destination)) {
                     const localSize = fs.statSync(destination).size;
-                    logger.log(t('logging.existingFile', {file: fileName}));
-                    return {url, destination, skip: false};
+                    meta.downloadedSize(localSize).flush()
+                    if (!meta.getCompleted()) logger.log(t('logging.existingFile', {file: fileName}));
+                    else logger.log(t('logging.downloadCompleted', {file: fileName}))
                 }
-                return {url, destination, skip: false};
+                return meta
             }),
             mergeMap(
-                ({url, destination, skip}) =>
-                    skip
-                        ? of(`File già scaricato: ${destination}`)
-                        : downloadFileWithRetry$(url, destination),
+                (meta) => {
+                    return meta.getCompleted()
+                        ? of(`File già scaricato: ${meta.getFilename()}`)
+                        : downloadFileWithRetry$(meta)
+                },
                 5 // Limita a 5 richieste parallele
-            )
+            ),
+            map(meta => {
+                printUpdate()
+                return meta
+            })
         )
         .subscribe({
             next: (result) => {
                 if (result) logger.debug(result);
             },
-            error: (err) => logger.error(t('error.fluxError', {err})),
+            error: (err) => logger.error(t('error.fluxError', {err}), err),
             complete: () => logger.log("\n", t('logging.allCompleted'))
         });
 }
