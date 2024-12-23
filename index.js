@@ -111,7 +111,9 @@ function downloadFile$(url, destination) {
             if (statusCode === 416) {
                 console.log("file già scaricato", destination)
                 fileSize = parseInt(headers['content-length'], 10) + downloadedSize;
-                updateContext(destination, downloadedSize, fileSize, downloadedSize, new Date().getMilliseconds(), new Date().getMilliseconds())
+                updateContext(
+                    `${path.basename(new URL(url).pathname)} (${new URL(url).host})`,
+                    downloadedSize, fileSize, downloadedSize, new Date().getMilliseconds(), new Date().getMilliseconds())
             }
 
             if (statusCode === 200 || statusCode === 206) {
@@ -124,7 +126,9 @@ function downloadFile$(url, destination) {
                     const prevDate = curDate
                     curDate = new Date().getMilliseconds()
                     downloadedSize += chunk.length;
-                    updateContext(destination, downloadedSize, fileSize, prevSize, prevDate, curDate)
+                    updateContext(
+                        `${path.basename(new URL(url).pathname)} (${new URL(url).host})`
+                        , downloadedSize, fileSize, prevSize, prevDate, curDate)
                 });
 
                 response.pipe(file);
