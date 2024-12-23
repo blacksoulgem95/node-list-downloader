@@ -14,6 +14,7 @@ const levelMapper = {
 }
 
 const stream = fs.createWriteStream(process.env['LOGFILE'] || path.join(dirname(__filename), 'nodelistdownloader.log'), {flags: 'a'});
+const errorStream = fs.createWriteStream(process.env['LOGFILE'] + '.error.log' || path.join(dirname(__filename), 'nodelistdownloader.error.log'), {flags: 'a'});
 
 const print = (level, data) => {
     if (level === "debug" && process.env['DEBUG'] !== "true") {
@@ -27,6 +28,7 @@ const print = (level, data) => {
     console[level](consoleOutput)
 
     stream.write(consoleOutput + chalk.reset('\n'))
+    if (level === 'error' || level === 'warning') errorStream.write(consoleOutput + chalk.reset('\n'))
 }
 
 export const log = (...data) => {
