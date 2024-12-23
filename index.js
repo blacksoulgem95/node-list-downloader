@@ -48,6 +48,8 @@ async function _printUpdate() {
         for (const [url, data] of Object.entries(context)) {
             const {total, downloaded, timestamp, previousTimestamp, previousDownloaded} = data
 
+            if (formatBytes(downloaded) === formatBytes(total)) continue;
+
             const progressPercentage = total > 0 ? ((downloaded / total) * 100).toFixed(2) : 'N/A';
 
             let speed = "In Attesa"
