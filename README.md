@@ -2,7 +2,7 @@
 
 **Node List Downloader** è un semplice tool che permette di scaricare una lista di file a partire da una lista di link fornita. Il tutto è gestito tramite Docker per una configurazione rapida e senza complicazioni.
 
-![Tux, the Linux mascot](./screenshot.png)
+![Screenshot](./screenshot.png)
 
 
 
