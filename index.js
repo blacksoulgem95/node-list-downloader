@@ -81,13 +81,37 @@ async function _printUpdate() {
     })
 }
 
+function getFileSize$(url) {
+    logger.log("Ottengo dimensione per", url)
+    return new Promise((resolve, reject) => {
+        https.get(url, { method: 'HEAD' }, (response) => {
+            const { statusCode, headers } = response;
+
+            if ([301, 302, 303, 307, 308].includes(statusCode)) {
+                const redirectUrl = headers.location;
+                if (redirectUrl) {
+                    resolve(getFileSize$(redirectUrl));
+                } else {
+                    reject('Reindirizzamento senza Location');
+                }
+            } else if (statusCode === 200) {
+                const size = parseInt(headers['content-length'], 10);
+                resolve( size );
+            } else {
+                reject(`Errore ottenendo la dimensione del file: ${statusCode}`);
+            }
+        }).on('error', reject);
+    });
+}
+
+
 // Funzione per scaricare un file HTTP
 function downloadFile$(url, destination) {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
         let fileSize = 0;
         let downloadedSize = 0;
 
-        logger.log('Downloading file', `${path.basename(new URL(url).pathname)} (${new URL(url).host})`)
+        logger.log('Scaricamento', `${path.basename(new URL(url).pathname)} (${new URL(url).host})`)
 
         // Verifica se esiste un file parziale
         const options = {};
@@ -95,7 +119,15 @@ function downloadFile$(url, destination) {
             const stats = fs.statSync(destination);
             downloadedSize = stats.size;
             options.headers = {Range: `bytes=${downloadedSize}-`};
+            fileSize = await getFileSize$(url, downloadedSize)
+            if (downloadedSize === fileSize) {
+                logger.log("File già scaricato, skip")
+                resolve(destination)
+            }
         }
+
+
+        logger.debug("Controllo dimensione", formatBytes(downloadedSize), downloadedSize, formatBytes(fileSize), fileSize)
 
         const req = https.get(url, options, (response) => {
             const {statusCode, headers} = response;
@@ -200,7 +232,7 @@ function main() {
                 // Verifica file esistente
                 if (fs.existsSync(destination)) {
                     const localSize = fs.statSync(destination).size;
-                    logger.debug(`File esistente, si tenta di finirlo nel caso non sia completo: ${fileName}`);
+                    logger.log(`File esistente, si tenta di finirlo nel caso non sia completo: ${fileName}`);
                     return {url, destination, skip: false};
                 }
                 return {url, destination, skip: false};
